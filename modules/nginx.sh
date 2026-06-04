@@ -59,20 +59,26 @@ nginx_configure_vhost() {
 
     local vhost_file="/etc/nginx/sites-available/${DOMAIN}.conf"
     local vhost_link="/etc/nginx/sites-enabled/${DOMAIN}.conf"
-    local web_root="${WEB_ROOT}/${DOMAIN}"
-    local php_socket
-    php_socket="$(php_get_socket)" || php_socket="unix:/run/php/php-fpm.sock"
+    local web_root="/var/www/wordpress"   # always fixed
 
-    # Backup existing vhost
+    # Detect actual PHP-FPM socket
+    local php_socket
+    php_socket="$(php_get_socket 2>/dev/null)" || true
+    # Fallback: scan for any running php-fpm socket
+    if [[ -z "${php_socket}" ]]; then
+        local sock
+        sock="$(find /run/php -name 'php*-fpm.sock' 2>/dev/null | head -1)"
+        php_socket="${sock:+unix:${sock}}"
+    fi
+    [[ -z "${php_socket}" ]] && php_socket="unix:/run/php/php${PHP_VERSION:-8.3}-fpm.sock"
+
     rollback_backup "${vhost_file}" 2>/dev/null || true
 
-    log_step "Writing Nginx vhost: ${vhost_file}"
+    log_step "Writing Nginx vhost: ${vhost_file} (root: ${web_root})"
 
-    # Create sites-available / sites-enabled directories if they don't exist
-    # (official Nginx packages may use /etc/nginx/conf.d/ instead)
+    # Official Nginx package uses /etc/nginx/conf.d/, Ubuntu uses sites-available
     if [[ ! -d /etc/nginx/sites-available ]]; then
         mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-        # Include sites-enabled in nginx.conf if not already present
         if ! grep -q 'sites-enabled' /etc/nginx/nginx.conf 2>/dev/null; then
             sed -i '/http {/a\    include /etc/nginx/sites-enabled/*.conf;' \
                 /etc/nginx/nginx.conf
@@ -88,98 +94,67 @@ server {
     root ${web_root};
     index index.php index.html index.htm;
 
-    # Logging
     access_log /var/log/nginx/${DOMAIN}-access.log combined buffer=512k flush=1m;
     error_log  /var/log/nginx/${DOMAIN}-error.log warn;
 
-    # Security headers
-    add_header X-Frame-Options           "SAMEORIGIN"  always;
-    add_header X-XSS-Protection          "1; mode=block" always;
-    add_header X-Content-Type-Options    "nosniff"     always;
-    add_header Referrer-Policy           "no-referrer-when-downgrade" always;
-    add_header Permissions-Policy        "geolocation=(),midi=(),camera=(),usb=(),magnetometer=(),accelerometer=(),gyroscope=(),microphone=()" always;
+    add_header X-Frame-Options        "SAMEORIGIN"  always;
+    add_header X-Content-Type-Options "nosniff"     always;
+    add_header X-XSS-Protection       "1; mode=block" always;
+    add_header Referrer-Policy        "no-referrer-when-downgrade" always;
 
-    # Disable directory listing
     autoindex off;
 
-    # WordPress permalinks
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
     }
 
-    # PHP-FPM
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include        fastcgi_params;
         fastcgi_pass   ${php_socket};
         fastcgi_index  index.php;
         fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_param  PHP_VALUE "upload_max_filesize=64M \n post_max_size=64M";
         fastcgi_read_timeout 300;
-        fastcgi_buffer_size 128k;
-        fastcgi_buffers 4 256k;
+        fastcgi_buffer_size  128k;
+        fastcgi_buffers      4 256k;
     }
 
-    # Secure wp-config.php
-    location = /wp-config.php {
-        deny all;
-        return 404;
-    }
+    location = /wp-config.php          { deny all; return 404; }
+    location = /xmlrpc.php             { deny all; return 404; }
+    location ~ /\.                     { deny all; return 404; }
+    location ~* \.(htaccess|htpasswd|ini|log|sh|sql|bak)\$ { deny all; return 404; }
 
-    # Disable XML-RPC
-    location = /xmlrpc.php {
-        deny all;
-        return 404;
-    }
-
-    # Block hidden files
-    location ~ /\. {
-        deny all;
-        return 404;
-    }
-
-    # Block access to sensitive files
-    location ~* \.(htaccess|htpasswd|ini|log|sh|sql|bak)$ {
-        deny all;
-        return 404;
-    }
-
-    # Static assets caching
-    location ~* \.(css|js|jpg|jpeg|png|gif|ico|woff|woff2|ttf|svg|webp)$ {
+    location ~* \.(css|js|jpg|jpeg|png|gif|ico|woff|woff2|ttf|svg|webp)\$ {
         expires 365d;
         add_header Cache-Control "public, immutable";
         access_log off;
     }
 
-    # Gzip
-    gzip            on;
-    gzip_vary       on;
-    gzip_proxied    any;
+    gzip on;
+    gzip_vary on;
     gzip_comp_level 6;
-    gzip_types      text/plain text/css text/xml application/json
-                    application/javascript application/rss+xml
-                    application/atom+xml image/svg+xml;
+    gzip_types text/plain text/css text/xml application/json
+               application/javascript application/rss+xml image/svg+xml;
 }
 NGINXCONF
 
-    # Enable vhost
     ln -sf "${vhost_file}" "${vhost_link}" 2>/dev/null || true
 
-    # Remove default site if present
+    # Remove default sites
     rm -f /etc/nginx/sites-enabled/default \
           /etc/nginx/conf.d/default.conf 2>/dev/null || true
 
-    # Test configuration
-    nginx -t 2>&1 | tee -a "${LOG_FILE}" || {
+    # Test and reload
+    if ! nginx -t 2>&1 | tee -a "${LOG_FILE}"; then
         log_error "Nginx configuration test failed."
         return 1
-    }
+    fi
 
     systemctl reload nginx || systemctl restart nginx || {
         log_error "Nginx reload failed."
         return 1
     }
 
-    log_success "Nginx virtual host configured: ${vhost_file}"
+    log_success "Nginx vhost configured for ${DOMAIN} → ${web_root}"
     return 0
 }
 
