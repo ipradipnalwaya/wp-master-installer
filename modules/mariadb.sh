@@ -16,6 +16,38 @@ DB_PASS="${DB_PASS:-}"
 DB_ROOT_PASS="${DB_ROOT_PASS:-}"  # generated if empty
 MARIADB_CONF_DIR="/etc/mysql/mariadb.conf.d"
 
+# Credentials are persisted here so re-runs use the same passwords
+# that were actually written to MariaDB, not a freshly generated one.
+_DB_CREDS_FILE="/root/.wp-master-db-creds"
+
+# ---------------------------------------------------------------------------
+# Persist / reload generated credentials
+# ---------------------------------------------------------------------------
+_mariadb_save_creds() {
+    cat > "${_DB_CREDS_FILE}" <<EOF
+# wp-master-installer — generated MariaDB credentials
+# DO NOT EDIT — regenerate by running with --reset-checkpoints
+DB_ROOT_PASS='${DB_ROOT_PASS}'
+DB_NAME='${DB_NAME}'
+DB_USER='${DB_USER}'
+DB_PASS='${DB_PASS}'
+EOF
+    chmod 600 "${_DB_CREDS_FILE}"
+    log_debug "Database credentials saved to ${_DB_CREDS_FILE}"
+}
+
+_mariadb_load_creds() {
+    if [[ -f "${_DB_CREDS_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${_DB_CREDS_FILE}"
+        # Re-export so wordpress.sh and other modules see the correct values
+        export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
+        log_debug "Database credentials loaded from ${_DB_CREDS_FILE}"
+        return 0
+    fi
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Install latest stable MariaDB from the official MariaDB repo
 # ---------------------------------------------------------------------------
@@ -30,10 +62,6 @@ mariadb_install() {
     log_step "Adding official MariaDB repository..."
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         apt-transport-https curl gnupg2 lsb-release 2>/dev/null
-
-    # Fetch the MariaDB repo setup script for the current Ubuntu release
-    local codename
-    codename="$(lsb_release -sc)"
 
     # Use the MariaDB repo setup script (auto-selects latest stable)
     curl -sS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup \
@@ -60,6 +88,14 @@ mariadb_install() {
 mariadb_secure() {
     log_section "MariaDB Security Hardening"
 
+    # If credentials file already exists from a prior run, reload and skip
+    if _mariadb_load_creds && [[ -n "${DB_ROOT_PASS}" ]]; then
+        log_info "Existing MariaDB root credentials loaded. Skipping re-hardening."
+        # Ensure .my.cnf is still present (may have been wiped)
+        _mariadb_write_root_mycnf
+        return 0
+    fi
+
     # Generate root password if not provided
     if [[ -z "${DB_ROOT_PASS}" ]]; then
         DB_ROOT_PASS="$(openssl rand -base64 32)"
@@ -68,34 +104,29 @@ mariadb_secure() {
 
     log_step "Setting root password and removing insecure defaults..."
 
-    mysql --user=root 2>/dev/null <<MYSQL_SECURE || true
--- Set root password (unix_socket + password)
+    mysql --user=root <<MYSQL_SECURE || true
 ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${DB_ROOT_PASS}') OR unix_socket;
 FLUSH PRIVILEGES;
-
--- Remove anonymous users
 DELETE FROM mysql.user WHERE User='';
-
--- Remove remote root login
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-
--- Remove test database
 DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-
 FLUSH PRIVILEGES;
 MYSQL_SECURE
 
-    # Write a temporary .my.cnf for root so subsequent calls work
+    _mariadb_write_root_mycnf
+    _mariadb_save_creds
+    log_success "MariaDB secured."
+    return 0
+}
+
+_mariadb_write_root_mycnf() {
     cat > /root/.my.cnf <<EOF
 [client]
 user=root
 password=${DB_ROOT_PASS}
 EOF
     chmod 600 /root/.my.cnf
-
-    log_success "MariaDB secured."
-    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -104,6 +135,10 @@ EOF
 mariadb_create_database() {
     log_section "MariaDB: Creating WordPress Database"
 
+    # Always reload credentials so we use whatever was persisted —
+    # this handles re-runs where DB_PASS would otherwise be regenerated fresh.
+    _mariadb_load_creds || true
+
     if [[ -z "${DB_PASS}" ]]; then
         DB_PASS="$(openssl rand -base64 24)"
         log_info "Generated database user password."
@@ -111,8 +146,7 @@ mariadb_create_database() {
 
     log_step "Creating database '${DB_NAME}' and user '${DB_USER}'..."
 
-    # Use DROP USER IF EXISTS + CREATE to ensure the password is always correct,
-    # even if a previous partial run left the user with a different password.
+    # DROP + CREATE ensures the stored password always matches DB_PASS
     mysql --user=root <<MYSQL_SETUP
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 DROP USER IF EXISTS '${DB_USER}'@'localhost';
@@ -126,6 +160,10 @@ MYSQL_SETUP
         return 1
     fi
 
+    # Persist credentials (includes DB_PASS) so verify and future runs use same value
+    _mariadb_save_creds
+    export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
+
     log_success "Database '${DB_NAME}' and user '${DB_USER}' created."
     return 0
 }
@@ -136,10 +174,12 @@ MYSQL_SETUP
 mariadb_verify_access() {
     log_step "Verifying database access..."
 
-    # Try TCP first (explicit protocol avoids socket auth conflicts),
-    # then fall back to socket/default if TCP is not listening.
+    # Always reload so we have the persisted password, not a stale in-memory value
+    _mariadb_load_creds || true
+
     local connect_ok=0
 
+    # Try explicit TCP first (avoids unix_socket auth bypass issues)
     if mysql \
             --user="${DB_USER}" \
             --password="${DB_PASS}" \
@@ -148,6 +188,7 @@ mariadb_verify_access() {
             "${DB_NAME}" \
             -e "SELECT 1;" &>/dev/null; then
         connect_ok=1
+    # Fall back to socket
     elif mysql \
             --user="${DB_USER}" \
             --password="${DB_PASS}" \
@@ -162,16 +203,13 @@ mariadb_verify_access() {
         return 0
     fi
 
-    # Diagnostics — help narrow down root cause without exposing the password
     log_error "Cannot connect to database '${DB_NAME}' as '${DB_USER}'."
-    log_info  "Diagnostic: checking if user exists in mysql.user..."
+    log_info  "Diagnostic: user record in mysql.user:"
     mysql --user=root -e \
-        "SELECT User, Host, plugin FROM mysql.user WHERE User='${DB_USER}';" \
-        2>/dev/null || true
-    log_info  "Diagnostic: checking grants..."
+        "SELECT User, Host, plugin FROM mysql.user WHERE User='${DB_USER}';" 2>/dev/null || true
+    log_info  "Diagnostic: grants:"
     mysql --user=root -e \
-        "SHOW GRANTS FOR '${DB_USER}'@'localhost';" \
-        2>/dev/null || true
+        "SHOW GRANTS FOR '${DB_USER}'@'localhost';" 2>/dev/null || true
     return 1
 }
 

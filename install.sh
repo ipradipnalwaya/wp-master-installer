@@ -675,6 +675,18 @@ BANNER
     # Reset checkpoints if requested (must come after globals so state file path is known)
     if [[ "${RESET_CHECKPOINTS}" == "true" ]]; then
         checkpoint_reset
+        # Also wipe persisted credentials so fresh passwords are generated
+        rm -f "/root/.wp-master-db-creds" /root/.my.cnf 2>/dev/null || true
+        log_info "Persisted credentials cleared. Fresh passwords will be generated."
+    fi
+
+    # Reload any persisted DB credentials so all phases use the same passwords
+    # that were actually written to MariaDB on a prior run.
+    if [[ -f "/root/.wp-master-db-creds" ]]; then
+        # shellcheck disable=SC1091
+        source "/root/.wp-master-db-creds"
+        export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
+        log_info "Loaded persisted database credentials."
     fi
 
     _run_installation
