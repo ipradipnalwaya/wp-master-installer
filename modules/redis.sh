@@ -72,22 +72,24 @@ redis_configure() {
     log_step "Configuring Redis (${redis_memory_mb}MB max memory)..."
 
     # Apply settings via redis-cli or direct config manipulation
-    _redis_set_conf "bind"                   "127.0.0.1 -::1"
-    _redis_set_conf "port"                   "${REDIS_PORT}"
-    _redis_set_conf "maxmemory"              "${redis_memory_mb}mb"
-    _redis_set_conf "maxmemory-policy"       "${REDIS_MAXMEMORY_POLICY}"
-    _redis_set_conf "save"                   ""  # disable RDB persistence for cache
-    _redis_set_conf "appendonly"             "no"
-    _redis_set_conf "timeout"                "300"
-    _redis_set_conf "tcp-keepalive"          "300"
-    _redis_set_conf "loglevel"               "notice"
-    _redis_set_conf "databases"              "16"
+    _redis_set_conf "bind"             "127.0.0.1 -::1"
+    _redis_set_conf "port"             "${REDIS_PORT}"
+    _redis_set_conf "maxmemory"        "${redis_memory_mb}mb"
+    _redis_set_conf "maxmemory-policy" "${REDIS_MAXMEMORY_POLICY}"
+    _redis_set_conf "save"             ""
+    _redis_set_conf "appendonly"       "no"
+    _redis_set_conf "timeout"          "300"
+    _redis_set_conf "tcp-keepalive"    "300"
+    _redis_set_conf "loglevel"         "notice"
+    _redis_set_conf "databases"        "16"
 
-    # Disable dangerous commands
-    _redis_set_conf "rename-command FLUSHALL" '""'
-    _redis_set_conf "rename-command FLUSHDB"  '""'
-    _redis_set_conf "rename-command DEBUG"    '""'
-    _redis_set_conf "rename-command CONFIG"   '""'
+    # Disable dangerous commands — append at end (space in name breaks sed)
+    grep -q 'rename-command FLUSHALL' "${REDIS_CONF}" 2>/dev/null \
+        || echo 'rename-command FLUSHALL ""' >> "${REDIS_CONF}"
+    grep -q 'rename-command FLUSHDB' "${REDIS_CONF}" 2>/dev/null \
+        || echo 'rename-command FLUSHDB ""'  >> "${REDIS_CONF}"
+    grep -q 'rename-command DEBUG' "${REDIS_CONF}" 2>/dev/null \
+        || echo 'rename-command DEBUG ""'    >> "${REDIS_CONF}"
 
     systemctl restart redis-server || {
         log_error "Redis restart failed."

@@ -16,7 +16,8 @@ _SSL_SH_LOADED=1
 # Globals
 # ---------------------------------------------------------------------------
 SSL_DOMAIN="${SSL_DOMAIN:-${DOMAIN:-localhost}}"
-SSL_EMAIL="${SSL_EMAIL:-${ADMIN_EMAIL:-admin@example.com}}"
+# Always derive SSL_EMAIL from ADMIN_EMAIL at runtime — never fall back to a placeholder
+SSL_EMAIL="${ADMIN_EMAIL:-${SSL_EMAIL:-}}"
 SSL_CERT_PATH="/etc/letsencrypt/live/${SSL_DOMAIN}/fullchain.pem"
 SSL_KEY_PATH="/etc/letsencrypt/live/${SSL_DOMAIN}/privkey.pem"
 SSL_ENABLED=false
@@ -103,6 +104,13 @@ ssl_verify_dns() {
 # ---------------------------------------------------------------------------
 ssl_obtain_certificate() {
     log_section "SSL Certificate Generation (Let's Encrypt)"
+
+    # Abort early if email is missing or still a placeholder
+    if [[ -z "${SSL_EMAIL}" || "${SSL_EMAIL}" == *"example.com"* ]]; then
+        log_error "SSL email is not set or is a placeholder ('${SSL_EMAIL}')."
+        log_error "Provide a real email via --email or the wizard prompt. Skipping SSL."
+        return 1
+    fi
 
     # Check if certificate already exists and is valid
     if [[ -f "${SSL_CERT_PATH}" ]]; then

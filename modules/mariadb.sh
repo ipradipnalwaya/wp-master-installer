@@ -227,12 +227,15 @@ mariadb_optimize() {
     local custom_conf="${MARIADB_CONF_DIR}/99-wordpress-optimized.cnf"
     rollback_backup "${custom_conf}" 2>/dev/null || true
 
-    # Calculate InnoDB buffer pool (50% of RAM)
-    local ram_mb="${SYS_RAM_MB:-512}"
+    # Calculate InnoDB buffer pool — always read directly from /proc/meminfo
+    # so this works correctly even when os_detect was skipped (checkpoint resume).
+    local ram_mb
+    ram_mb=$(awk '/MemTotal/ { printf "%d", $2/1024 }' /proc/meminfo 2>/dev/null || echo 0)
+    [[ "${ram_mb}" -lt 128 ]] && ram_mb=512   # safe floor
+
     local buffer_pool_mb=$(( ram_mb / 2 ))
     local log_file_mb=64
     local max_connections=100
-    local query_cache_size=0  # deprecated in newer MariaDB — keep 0
 
     if [[ "${ram_mb}" -ge 1024 ]]; then
         buffer_pool_mb=$(( ram_mb * 50 / 100 ))
