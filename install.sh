@@ -582,7 +582,8 @@ _run_installation() {
     checkpoint_run "mariadb_install"        mariadb_install     || exit 1
     checkpoint_run "mariadb_secure"         mariadb_secure      || exit 1
     checkpoint_run "mariadb_create_db"      mariadb_create_database || exit 1
-    checkpoint_run "mariadb_verify_access"  mariadb_verify_access   || exit 1
+    # Always verify access — not checkpointed since it's a read-only check
+    mariadb_verify_access || exit 1
 
     # --- Phase 5: WordPress ---
     checkpoint_run "wpcli_install"          wpcli_install       || exit 1

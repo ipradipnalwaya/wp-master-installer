@@ -111,12 +111,16 @@ mariadb_create_database() {
 
     log_step "Creating database '${DB_NAME}' and user '${DB_USER}'..."
 
-    mysql --user=root 2>/dev/null <<MYSQL_SETUP
+    # Use DROP USER IF EXISTS + CREATE to ensure the password is always correct,
+    # even if a previous partial run left the user with a different password.
+    mysql --user=root <<MYSQL_SETUP
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+DROP USER IF EXISTS '${DB_USER}'@'localhost';
+CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 MYSQL_SETUP
+
     if [[ $? -ne 0 ]]; then
         log_error "Failed to create database or user."
         return 1
@@ -132,15 +136,43 @@ MYSQL_SETUP
 mariadb_verify_access() {
     log_step "Verifying database access..."
 
-    if mysql --user="${DB_USER}" --password="${DB_PASS}" \
-             --host=localhost "${DB_NAME}" \
-             -e "SELECT 1;" &>/dev/null; then
+    # Try TCP first (explicit protocol avoids socket auth conflicts),
+    # then fall back to socket/default if TCP is not listening.
+    local connect_ok=0
+
+    if mysql \
+            --user="${DB_USER}" \
+            --password="${DB_PASS}" \
+            --host=127.0.0.1 \
+            --protocol=TCP \
+            "${DB_NAME}" \
+            -e "SELECT 1;" &>/dev/null; then
+        connect_ok=1
+    elif mysql \
+            --user="${DB_USER}" \
+            --password="${DB_PASS}" \
+            --host=localhost \
+            "${DB_NAME}" \
+            -e "SELECT 1;" &>/dev/null; then
+        connect_ok=1
+    fi
+
+    if [[ "${connect_ok}" -eq 1 ]]; then
         log_success "Database access verified for user '${DB_USER}'."
         return 0
-    else
-        log_error "Cannot connect to database '${DB_NAME}' as '${DB_USER}'."
-        return 1
     fi
+
+    # Diagnostics — help narrow down root cause without exposing the password
+    log_error "Cannot connect to database '${DB_NAME}' as '${DB_USER}'."
+    log_info  "Diagnostic: checking if user exists in mysql.user..."
+    mysql --user=root -e \
+        "SELECT User, Host, plugin FROM mysql.user WHERE User='${DB_USER}';" \
+        2>/dev/null || true
+    log_info  "Diagnostic: checking grants..."
+    mysql --user=root -e \
+        "SHOW GRANTS FOR '${DB_USER}'@'localhost';" \
+        2>/dev/null || true
+    return 1
 }
 
 # ---------------------------------------------------------------------------

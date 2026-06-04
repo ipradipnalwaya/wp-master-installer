@@ -78,7 +78,7 @@ verify_mariadb() {
 
     # Verify DB connection
     if mysql --user="${DB_USER}" --password="${DB_PASS}" \
-             --host=127.0.0.1 "${DB_NAME}" \
+             --host=127.0.0.1 --protocol=TCP "${DB_NAME}" \
              -e "SELECT 1;" &>/dev/null; then
         log_success "MariaDB connection verified."
         return 0
