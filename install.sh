@@ -110,10 +110,6 @@ _set_defaults() {
     DB_USER="wp_user"
     DB_PASS=""
     DB_ROOT_PASS=""
-    WP_ADMIN_USER="admin"
-    WP_ADMIN_PASS=""
-    WP_ADMIN_EMAIL=""
-    WP_SITE_TITLE="My WordPress Site"
     INSTALL_REDIS=true
     INSTALL_SSL=true
     UNATTENDED_MODE=false
@@ -166,18 +162,6 @@ _parse_args() {
                 ;;
             --db-pass)
                 DB_PASS="${2:-}"
-                shift 2
-                ;;
-            --wp-admin-user)
-                WP_ADMIN_USER="${2:-admin}"
-                shift 2
-                ;;
-            --wp-admin-pass)
-                WP_ADMIN_PASS="${2:-}"
-                shift 2
-                ;;
-            --wp-title)
-                WP_SITE_TITLE="${2:-}"
                 shift 2
                 ;;
             --no-ssl)
@@ -249,10 +233,7 @@ OPTIONS:
   --php-version VER       PHP version: 8.1, 8.2, 8.3 (default: 8.3)
   --db-name     NAME      Database name (default: wordpress)
   --db-user     USER      Database username (default: wp_user)
-  --db-pass     PASS      Database password (auto-generated if empty)
-  --wp-admin-user USER    WordPress admin username (default: admin)
-  --wp-admin-pass PASS    WordPress admin password (auto-generated if empty)
-  --wp-title    TITLE     WordPress site title
+  --db-pass     PASS      Database password (prompted if empty)
   --no-ssl                Skip SSL certificate setup
   --no-redis              Skip Redis installation
   --no-rollback           Disable automatic rollback on error
@@ -269,7 +250,11 @@ EXAMPLES:
 
   # Unattended with flags
   sudo bash install.sh --unattended --domain example.com --email admin@example.com \\
-    --webserver nginx --php-version 8.3 --wp-title "My Site" --no-redis
+    --webserver nginx --php-version 8.3 --no-redis
+
+NOTE:
+  wp-config.php is NOT generated automatically. After installation, visit
+  http(s)://DOMAIN/ to complete the WordPress setup through the browser.
 
 CONFIG FILE FORMAT:
   See config/unattended.env.example for a sample configuration file.
@@ -327,7 +312,11 @@ _run_wizard() {
     log_section "WP Master Installer — Interactive Setup Wizard"
 
     echo ""
-    echo "  This wizard will configure your WordPress installation."
+    echo "  This wizard installs the full LEMP/LAMP stack and downloads WordPress."
+    echo "  You will enter your database credentials below — they will be created"
+    echo "  in MariaDB for you. After installation, visit your domain in a browser"
+    echo "  to complete the WordPress setup (language, site title, admin account)."
+    echo ""
     echo "  Press Ctrl+C at any time to cancel."
     echo ""
 
@@ -341,16 +330,15 @@ _run_wizard() {
         echo "  [!] Invalid domain. Please enter a valid domain (e.g., example.com)."
     done
 
-    # Admin email
+    # Admin email (for SSL cert / server config only)
     while true; do
-        read -rp "  Admin email address: " ADMIN_EMAIL
+        read -rp "  Admin email address (used for SSL cert): " ADMIN_EMAIL
         ADMIN_EMAIL="${ADMIN_EMAIL// /}"
         if _validate_email "${ADMIN_EMAIL}"; then
             break
         fi
         echo "  [!] Invalid email address. Please try again."
     done
-    WP_ADMIN_EMAIL="${ADMIN_EMAIL}"
 
     # Web server
     echo ""
@@ -384,13 +372,13 @@ _run_wizard() {
         esac
     done
 
-    # WordPress site title
+    # ── Database credentials ──────────────────────────────────────────────
     echo ""
-    read -rp "  WordPress site title [default: My WordPress Site]: " WP_SITE_TITLE
-    WP_SITE_TITLE="${WP_SITE_TITLE:-My WordPress Site}"
+    echo "  ── Database Credentials ─────────────────────────────────────────"
+    echo "  These will be created in MariaDB. Keep them safe — you will need"
+    echo "  to enter them on the WordPress setup page after installation."
+    echo ""
 
-    # Database name
-    echo ""
     while true; do
         read -rp "  Database name [default: wordpress]: " DB_NAME
         DB_NAME="${DB_NAME:-wordpress}"
@@ -400,9 +388,8 @@ _run_wizard() {
         echo "  [!] Invalid database name. Use letters, numbers and underscores."
     done
 
-    # Database user
     while true; do
-        read -rp "  Database user [default: wp_user]: " DB_USER
+        read -rp "  Database username [default: wp_user]: " DB_USER
         DB_USER="${DB_USER:-wp_user}"
         if _validate_username "${DB_USER}"; then
             break
@@ -410,42 +397,16 @@ _run_wizard() {
         echo "  [!] Invalid username. Use letters, numbers, underscores, hyphens (3-32 chars)."
     done
 
-    # Database password
     while true; do
         read -rsp "  Database password (leave blank to auto-generate): " DB_PASS
         echo ""
         if [[ -z "${DB_PASS}" ]]; then
             DB_PASS="$(openssl rand -base64 20)"
-            echo "  [✔] Auto-generated database password."
+            echo "  [✔] Auto-generated database password: ${DB_PASS}"
+            echo "  [!] Save this password — you will need it on the WordPress setup page."
             break
         fi
         if _validate_password "${DB_PASS}"; then
-            break
-        fi
-        echo "  [!] Password must be at least 8 characters."
-    done
-
-    # WP admin username
-    echo ""
-    while true; do
-        read -rp "  WordPress admin username [default: admin]: " WP_ADMIN_USER
-        WP_ADMIN_USER="${WP_ADMIN_USER:-admin}"
-        if _validate_username "${WP_ADMIN_USER}"; then
-            break
-        fi
-        echo "  [!] Invalid username."
-    done
-
-    # WP admin password
-    while true; do
-        read -rsp "  WordPress admin password (leave blank to auto-generate): " WP_ADMIN_PASS
-        echo ""
-        if [[ -z "${WP_ADMIN_PASS}" ]]; then
-            WP_ADMIN_PASS="$(openssl rand -base64 16)"
-            echo "  [✔] Auto-generated WordPress admin password."
-            break
-        fi
-        if _validate_password "${WP_ADMIN_PASS}"; then
             break
         fi
         echo "  [!] Password must be at least 8 characters."
@@ -455,35 +416,31 @@ _run_wizard() {
     echo ""
     read -rp "  Install SSL certificate (Let's Encrypt)? [Y/n]: " ssl_choice
     ssl_choice="${ssl_choice:-Y}"
-    if [[ "${ssl_choice,,}" == "n" ]]; then
-        INSTALL_SSL=false
-    else
-        INSTALL_SSL=true
-    fi
+    [[ "${ssl_choice,,}" == "n" ]] && INSTALL_SSL=false || INSTALL_SSL=true
 
     # Redis
     read -rp "  Install Redis object cache? [Y/n]: " redis_choice
     redis_choice="${redis_choice:-Y}"
-    if [[ "${redis_choice,,}" == "n" ]]; then
-        INSTALL_REDIS=false
-    else
-        INSTALL_REDIS=true
-    fi
+    [[ "${redis_choice,,}" == "n" ]] && INSTALL_REDIS=false || INSTALL_REDIS=true
 
     # Confirmation summary
     echo ""
     log_section "Installation Summary"
     echo ""
-    printf "  %-25s %s\n" "Domain:"           "${DOMAIN}"
-    printf "  %-25s %s\n" "Admin Email:"      "${ADMIN_EMAIL}"
-    printf "  %-25s %s\n" "Web Server:"       "${WEB_SERVER}"
-    printf "  %-25s %s\n" "PHP Version:"      "${PHP_VERSION}"
-    printf "  %-25s %s\n" "Site Title:"       "${WP_SITE_TITLE}"
-    printf "  %-25s %s\n" "Database Name:"    "${DB_NAME}"
-    printf "  %-25s %s\n" "Database User:"    "${DB_USER}"
-    printf "  %-25s %s\n" "WP Admin User:"    "${WP_ADMIN_USER}"
-    printf "  %-25s %s\n" "Install SSL:"      "${INSTALL_SSL}"
-    printf "  %-25s %s\n" "Install Redis:"    "${INSTALL_REDIS}"
+    printf "  %-25s %s\n" "Domain:"        "${DOMAIN}"
+    printf "  %-25s %s\n" "Admin Email:"   "${ADMIN_EMAIL}"
+    printf "  %-25s %s\n" "Web Server:"    "${WEB_SERVER}"
+    printf "  %-25s %s\n" "PHP Version:"   "${PHP_VERSION}"
+    printf "  %-25s %s\n" "Database Name:" "${DB_NAME}"
+    printf "  %-25s %s\n" "Database User:" "${DB_USER}"
+    printf "  %-25s %s\n" "Database Pass:" "${DB_PASS}"
+    printf "  %-25s %s\n" "Install SSL:"   "${INSTALL_SSL}"
+    printf "  %-25s %s\n" "Install Redis:" "${INSTALL_REDIS}"
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    echo "  │  After install, open https://${DOMAIN}/ in your browser    │"
+    echo "  │  and enter the database credentials above to finish setup.  │"
+    echo "  └─────────────────────────────────────────────────────────────┘"
     echo ""
 
     read -rp "  Proceed with installation? [Y/n]: " confirm
@@ -528,9 +485,8 @@ _validate_unattended_config() {
         exit 1
     fi
 
-    # Auto-generate passwords if not set
-    [[ -z "${DB_PASS}" ]]       && DB_PASS="$(openssl rand -base64 20)"
-    [[ -z "${WP_ADMIN_PASS}" ]] && WP_ADMIN_PASS="$(openssl rand -base64 16)"
+    # Auto-generate DB password if not provided
+    [[ -z "${DB_PASS}" ]] && DB_PASS="$(openssl rand -base64 20)"
 
     log_success "Configuration validated."
 }
@@ -541,7 +497,6 @@ _validate_unattended_config() {
 _export_globals() {
     export DOMAIN ADMIN_EMAIL WEB_SERVER PHP_VERSION
     export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
-    export WP_ADMIN_USER WP_ADMIN_PASS WP_ADMIN_EMAIL WP_SITE_TITLE
     export INSTALL_REDIS INSTALL_SSL
     export WEB_ROOT WP_DIR SSL_ENABLED HEALTH_STATUS
     # Derived
@@ -586,26 +541,25 @@ _run_installation() {
     mariadb_verify_access || exit 1
 
     # --- Phase 5: WordPress ---
-    checkpoint_run "wpcli_install"          wpcli_install       || exit 1
-    checkpoint_run "wordpress_download"     wordpress_download  || exit 1
-    checkpoint_run "wordpress_configure"    wordpress_configure || exit 1
+    checkpoint_run "wpcli_install"          wpcli_install           || exit 1
+    checkpoint_run "wordpress_download"     wordpress_download      || exit 1
+
+    # NOTE: wp-config.php is intentionally NOT generated here.
+    # The user completes setup via the browser WordPress installer page.
 
     # --- Phase 6: Web Server Virtual Host ---
     checkpoint_run "webserver_vhost"        webserver_configure_vhost   || exit 1
     checkpoint_run "wordpress_htaccess"     wordpress_create_htaccess   warn
     checkpoint_run "wordpress_permissions"  wordpress_set_permissions   || exit 1
 
-    # --- Phase 7: WordPress Core Install ---
-    checkpoint_run "wordpress_install"      wordpress_install   || exit 1
-
-    # --- Phase 8: Redis (optional) ---
+    # --- Phase 7: Redis (optional) ---
     if [[ "${INSTALL_REDIS}" == "true" ]]; then
-        checkpoint_run "redis_install"              redis_install               warn
-        checkpoint_run "redis_configure"            redis_configure             warn
-        checkpoint_run "redis_configure_wordpress"  redis_configure_wordpress   warn
+        checkpoint_run "redis_install"      redis_install           warn
+        checkpoint_run "redis_configure"    redis_configure         warn
+        # redis_configure_wordpress skipped — requires wp-config.php
     fi
 
-    # --- Phase 9: SSL (optional) ---
+    # --- Phase 8: SSL (optional) ---
     if [[ "${INSTALL_SSL}" == "true" ]]; then
         checkpoint_run "ssl_install_certbot"    ssl_install_certbot     warn
         checkpoint_run "ssl_obtain_cert"        ssl_obtain_certificate  warn
@@ -615,15 +569,14 @@ _run_installation() {
         fi
     fi
 
-    # --- Phase 10: Optimization ---
+    # --- Phase 9: Optimization ---
     checkpoint_run "optimize_mariadb"   mariadb_optimize        warn
     checkpoint_run "optimize_kernel"    optimize_system_kernel  warn
-    checkpoint_run "optimize_wordpress" optimize_wordpress      warn
 
-    # --- Phase 11: Health Check ---
+    # --- Phase 10: Health Check ---
     checkpoint_run "verify_stack"       verify_full_stack       warn
 
-    # --- Phase 12: Report ---
+    # --- Phase 11: Report ---
     report_generate
 
     local end_time
@@ -632,12 +585,30 @@ _run_installation() {
     log_info "Installation completed in ${duration} seconds."
 
     # --- Final Banner ---
+    local proto="http"
+    [[ "${SSL_ENABLED:-false}" == "true" ]] && proto="https"
+
     if [[ "${HEALTH_STATUS:-UNCHECKED}" != *"DEGRADED"* ]]; then
         report_final_banner "SUCCESS"
     else
         report_final_banner "FAILED"
         exit 1
     fi
+
+    echo ""
+    echo "  ╔══════════════════════════════════════════════════════════════╗"
+    echo "  ║           NEXT STEP — Complete WordPress Setup               ║"
+    echo "  ╠══════════════════════════════════════════════════════════════╣"
+    printf "  ║  Open in browser: %-43s║\n" "${proto}://${DOMAIN}/"
+    echo "  ║                                                              ║"
+    echo "  ║  When prompted, enter these database details:                ║"
+    printf "  ║    Database Name : %-43s║\n" "${DB_NAME}"
+    printf "  ║    Username      : %-43s║\n" "${DB_USER}"
+    printf "  ║    Password      : %-43s║\n" "${DB_PASS}"
+    echo "  ║    Database Host : 127.0.0.1                                 ║"
+    echo "  ║    Table Prefix  : wp_  (or choose your own)                 ║"
+    echo "  ╚══════════════════════════════════════════════════════════════╝"
+    echo ""
 }
 
 # ---------------------------------------------------------------------------
