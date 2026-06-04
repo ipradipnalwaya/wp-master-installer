@@ -26,34 +26,66 @@ wpcli_install() {
 
     if [[ -x "${WP_CLI_BIN}" ]]; then
         local current_ver
-        current_ver="$(${WP_CLI_BIN} --version 2>/dev/null | awk '{print $2}')"
+        current_ver="$(_wpcli_run --version 2>/dev/null | awk '{print $2}')"
         log_info "WP-CLI already installed: v${current_ver}"
         return 0
     fi
 
-    log_step "Downloading WP-CLI..."
-    curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
-        -o "${WP_CLI_BIN}" || {
-        log_error "Failed to download WP-CLI."
-        return 1
-    }
-
-    chmod +x "${WP_CLI_BIN}"
-
-    # Verify
-    if "${WP_CLI_BIN}" --version &>/dev/null; then
-        log_success "WP-CLI installed: $(${WP_CLI_BIN} --version)"
-    else
-        log_error "WP-CLI verification failed."
+    # Ensure PHP is available — WP-CLI is a PHP phar and requires it
+    if ! command -v php &>/dev/null; then
+        log_error "PHP is not installed or not in PATH. WP-CLI requires PHP."
         return 1
     fi
+
+    log_step "Downloading WP-CLI..."
+    local tmp_phar
+    tmp_phar="$(mktemp /tmp/wp-cli.phar.XXXXXX)"
+
+    if ! curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
+            -o "${tmp_phar}"; then
+        log_error "Failed to download WP-CLI."
+        rm -f "${tmp_phar}"
+        return 1
+    fi
+
+    # Basic sanity check — the phar should start with '<?php'
+    if ! head -c 5 "${tmp_phar}" | grep -q '<?php'; then
+        log_error "Downloaded file does not appear to be a valid PHP phar."
+        rm -f "${tmp_phar}"
+        return 1
+    fi
+
+    chmod +x "${tmp_phar}"
+    mv "${tmp_phar}" "${WP_CLI_BIN}"
+
+    # Verify
+    local ver
+    ver="$(_wpcli_run --version 2>/dev/null)"
+    if [[ -n "${ver}" ]]; then
+        log_success "WP-CLI installed: ${ver}"
+    else
+        log_error "WP-CLI verification failed."
+        rm -f "${WP_CLI_BIN}"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Internal: run WP-CLI via php if direct execution fails
+# ---------------------------------------------------------------------------
+_wpcli_run() {
+    if "${WP_CLI_BIN}" "$@" 2>/dev/null; then
+        return 0
+    fi
+    # Fallback: invoke explicitly through php
+    php "${WP_CLI_BIN}" "$@"
 }
 
 # ---------------------------------------------------------------------------
 # Helper: run WP-CLI as www-data
 # ---------------------------------------------------------------------------
 wp() {
-    sudo -u www-data "${WP_CLI_BIN}" \
+    sudo -u www-data php "${WP_CLI_BIN}" \
         --path="${WP_DIR}" \
         --allow-root \
         "$@"
