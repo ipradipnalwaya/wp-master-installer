@@ -138,12 +138,12 @@ optimize_wordpress() {
         log_info "Redis object cache active — no additional WP cache needed."
     fi
 
-    # Set cron if real cron is preferred over WP-Cron
+    # WordPress cron via system cron
     local cron_file="/etc/cron.d/wordpress-${DOMAIN}"
     if [[ ! -f "${cron_file}" ]]; then
         cat > "${cron_file}" <<EOF
 # WordPress WP-Cron via system cron (every 5 minutes)
-*/5 * * * * www-data ${WP_CLI_BIN} --path=${WP_DIR} cron event run --due-now --quiet 2>/dev/null
+*/5 * * * * www-data curl -s "http://${DOMAIN}/wp-cron.php?doing_wp_cron" > /dev/null 2>&1
 EOF
         chmod 644 "${cron_file}"
         log_success "WordPress system cron configured."

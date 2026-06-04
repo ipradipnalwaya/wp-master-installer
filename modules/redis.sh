@@ -128,14 +128,8 @@ redis_configure_wordpress() {
     }
 
     log_step "Installing Redis Object Cache plugin..."
-    sudo -u www-data "${WP_CLI_BIN}" \
-        --path="${WP_DIR}" \
-        --allow-root \
-        plugin install redis-cache --activate --quiet \
-        2>&1 | tee -a "${LOG_FILE}" || {
-        log_warn "Failed to install Redis Object Cache plugin. Continuing without it."
-        return 0
-    }
+    log_info "Install the 'Redis Object Cache' plugin manually from WP Admin after setup."
+    return 0
 
     log_step "Adding Redis configuration to wp-config.php..."
 
@@ -156,16 +150,7 @@ define( 'WP_CACHE',          true );\\
     fi
 
     log_step "Enabling Redis Object Cache..."
-    sudo -u www-data "${WP_CLI_BIN}" \
-        --path="${WP_DIR}" \
-        --allow-root \
-        redis enable \
-        2>&1 | tee -a "${LOG_FILE}" || \
-    sudo -u www-data "${WP_CLI_BIN}" \
-        --path="${WP_DIR}" \
-        --allow-root \
-        plugin activate redis-cache \
-        2>/dev/null || true
+    log_info "Enable Redis Object Cache from WP Admin → Plugins after WordPress setup."
 
     log_success "Redis Object Cache configured for WordPress."
     REDIS_ENABLED=true

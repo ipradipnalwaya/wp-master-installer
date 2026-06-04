@@ -214,15 +214,11 @@ _ssl_update_vhost() {
     esac
 
     # Update WordPress URL to HTTPS
-    if command -v wp &>/dev/null && [[ -f "${WP_DIR}/wp-config.php" ]]; then
-        sudo -u www-data "${WP_CLI_BIN}" \
-            --path="${WP_DIR}" \
-            --allow-root \
-            option update siteurl "https://${SSL_DOMAIN}" 2>/dev/null || true
-        sudo -u www-data "${WP_CLI_BIN}" \
-            --path="${WP_DIR}" \
-            --allow-root \
-            option update home "https://${SSL_DOMAIN}" 2>/dev/null || true
+    if [[ -f "${WP_DIR}/wp-config.php" ]]; then
+        sed -i "s|define( 'WP_HOME'.*|define( 'WP_HOME', 'https://${SSL_DOMAIN}' );|" \
+            "${WP_DIR}/wp-config.php" 2>/dev/null || true
+        sed -i "s|define( 'WP_SITEURL'.*|define( 'WP_SITEURL', 'https://${SSL_DOMAIN}' );|" \
+            "${WP_DIR}/wp-config.php" 2>/dev/null || true
         log_success "WordPress URLs updated to HTTPS."
     fi
 }
