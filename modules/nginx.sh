@@ -72,9 +72,22 @@ nginx_configure_vhost() {
     fi
     [[ -z "${php_socket}" ]] && php_socket="unix:/run/php/php${PHP_VERSION:-8.3}-fpm.sock"
 
-    rollback_backup "${vhost_file}" 2>/dev/null || true
+    # Detect Nginx worker user (official package = nginx, Ubuntu = www-data)
+    local nginx_user
+    nginx_user="$(grep -E '^user\s' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | tr -d ';')"
+    [[ -z "${nginx_user}" ]] && nginx_user="www-data"
 
-    log_step "Writing Nginx vhost: ${vhost_file} (root: ${web_root})"
+    log_step "Writing Nginx vhost: ${vhost_file} (root: ${web_root}, php user: ${nginx_user})"
+
+    # Align PHP-FPM pool socket ownership with Nginx worker user
+    local pool_conf="/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf"
+    if [[ -f "${pool_conf}" ]]; then
+        sed -i "s/^listen\.owner.*/listen.owner = ${nginx_user}/" "${pool_conf}"
+        sed -i "s/^listen\.group.*/listen.group = ${nginx_user}/" "${pool_conf}"
+        sed -i "s/^listen\.mode.*/listen.mode = 0660/"            "${pool_conf}"
+        systemctl restart "php${PHP_VERSION}-fpm" 2>/dev/null || true
+        log_info "PHP-FPM socket ownership set to ${nginx_user}."
+    fi
 
     # Official Nginx package uses /etc/nginx/conf.d/, Ubuntu uses sites-available
     if [[ ! -d /etc/nginx/sites-available ]]; then
