@@ -16,11 +16,7 @@ _WORDPRESS_SH_LOADED=1
 # Globals (set by caller / wizard)
 # ---------------------------------------------------------------------------
 WP_DOMAIN="${WP_DOMAIN:-${DOMAIN:-localhost}}"
-WP_DIR="${WEB_ROOT}/${WP_DOMAIN}"
-WP_ADMIN_USER="${WP_ADMIN_USER:-admin}"
-WP_ADMIN_PASS="${WP_ADMIN_PASS:-}"
-WP_ADMIN_EMAIL="${WP_ADMIN_EMAIL:-admin@example.com}"
-WP_SITE_TITLE="${WP_SITE_TITLE:-My WordPress Site}"
+WP_DIR="/var/www/wordpress"          # always fixed — WordPress standard location
 WP_CLI_BIN="/usr/local/bin/wp"
 
 # ---------------------------------------------------------------------------

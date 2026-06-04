@@ -111,14 +111,12 @@ _set_defaults() {
     DB_NAME="wordpress"
     DB_USER="wp_user"
     DB_PASS=""
-    DB_ROOT_PASS=""
     INSTALL_REDIS=true
-    INSTALL_SSL=true
     UNATTENDED_MODE=false
     CONFIG_FILE=""
     ROLLBACK_ON_ERROR=true
     WEB_ROOT="/var/www"
-    WP_DIR=""
+    WP_DIR="/var/www/wordpress"
     SSL_ENABLED=false
     HEALTH_STATUS="UNCHECKED"
     RESET_CHECKPOINTS=false
@@ -165,10 +163,6 @@ _parse_args() {
             --db-pass)
                 DB_PASS="${2:-}"
                 shift 2
-                ;;
-            --no-ssl)
-                INSTALL_SSL=false
-                shift
                 ;;
             --no-redis)
                 INSTALL_REDIS=false
@@ -265,11 +259,21 @@ HELP
 }
 
 # ---------------------------------------------------------------------------
-# Input validation helpers
+# Validate domain or IP (accepts both)
 # ---------------------------------------------------------------------------
-_validate_domain() {
-    local domain="$1"
-    if [[ "${domain}" =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+_validate_domain_or_ip() {
+    local input="$1"
+    # Valid domain
+    if [[ "${input}" =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+        return 0
+    fi
+    # Valid IPv4
+    if [[ "${input}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        local IFS='.'
+        read -ra octets <<< "${input}"
+        for oct in "${octets[@]}"; do
+            [[ "${oct}" -le 255 ]] || return 1
+        done
         return 0
     fi
     return 1
@@ -314,141 +318,122 @@ _run_wizard() {
     log_section "WP Master Installer — Interactive Setup Wizard"
 
     echo ""
-    echo "  This wizard installs the full LEMP/LAMP stack and downloads WordPress."
-    echo "  You will enter your database credentials below — they will be created"
-    echo "  in MariaDB for you. After installation, visit your domain in a browser"
-    echo "  to complete the WordPress setup (language, site title, admin account)."
+    echo "  This wizard installs the full LEMP/LAMP stack and downloads WordPress"
+    echo "  to /var/www/wordpress. After installation, open your domain or IP in"
+    echo "  a browser to complete WordPress setup."
     echo ""
     echo "  Press Ctrl+C at any time to cancel."
     echo ""
 
-    # Domain
+    # Domain or IP
+    echo "  ── Site Address ──────────────────────────────────────────────────"
+    echo "  Enter a domain name (e.g., example.com) or your server IP address."
+    echo "  If you don't have a domain yet, enter the server's public IP."
+    echo ""
     while true; do
-        read -rp "  Domain name (e.g., example.com): " DOMAIN
+        read -rp "  Domain or IP: " DOMAIN
         DOMAIN="${DOMAIN// /}"
-        if _validate_domain "${DOMAIN}"; then
+        if _validate_domain_or_ip "${DOMAIN}"; then
             break
         fi
-        echo "  [!] Invalid domain. Please enter a valid domain (e.g., example.com)."
-    done
-
-    # Admin email (for SSL cert / server config only)
-    while true; do
-        read -rp "  Admin email address (used for SSL cert): " ADMIN_EMAIL
-        ADMIN_EMAIL="${ADMIN_EMAIL// /}"
-        if _validate_email "${ADMIN_EMAIL}"; then
-            break
-        fi
-        echo "  [!] Invalid email address. Please try again."
+        echo "  [!] Invalid input. Enter a domain (example.com) or IPv4 address."
     done
 
     # Web server
     echo ""
-    echo "  Web server options:"
+    echo "  ── Web Server ────────────────────────────────────────────────────"
     echo "    1) Nginx  (recommended)"
     echo "    2) Apache"
     while true; do
-        read -rp "  Choose web server [1-2, default: 1]: " ws_choice
+        read -rp "  Choose [1-2, default: 1]: " ws_choice
         ws_choice="${ws_choice:-1}"
         case "${ws_choice}" in
             1) WEB_SERVER="nginx";  break ;;
             2) WEB_SERVER="apache"; break ;;
-            *) echo "  [!] Invalid choice. Enter 1 or 2." ;;
+            *) echo "  [!] Enter 1 or 2." ;;
         esac
     done
 
     # PHP version
     echo ""
-    echo "  PHP version options:"
+    echo "  ── PHP Version ───────────────────────────────────────────────────"
     echo "    1) PHP 8.1"
     echo "    2) PHP 8.2"
     echo "    3) PHP 8.3 (latest stable — recommended)"
     while true; do
-        read -rp "  Choose PHP version [1-3, default: 3]: " php_choice
+        read -rp "  Choose [1-3, default: 3]: " php_choice
         php_choice="${php_choice:-3}"
         case "${php_choice}" in
             1) PHP_VERSION="8.1"; break ;;
             2) PHP_VERSION="8.2"; break ;;
             3) PHP_VERSION="8.3"; break ;;
-            *) echo "  [!] Invalid choice. Enter 1, 2, or 3." ;;
+            *) echo "  [!] Enter 1, 2, or 3." ;;
         esac
     done
 
-    # ── Database credentials ──────────────────────────────────────────────
+    # Database credentials
     echo ""
-    echo "  ── Database Credentials ─────────────────────────────────────────"
-    echo "  These will be created in MariaDB. Keep them safe — you will need"
-    echo "  to enter them on the WordPress setup page after installation."
+    echo "  ── Database Credentials ──────────────────────────────────────────"
+    echo "  These will be created in MariaDB. You will enter them on the"
+    echo "  WordPress setup page in your browser after installation."
     echo ""
 
     while true; do
-        read -rp "  Database name [default: wordpress]: " DB_NAME
+        read -rp "  Database name   [default: wordpress]: " DB_NAME
         DB_NAME="${DB_NAME:-wordpress}"
-        if _validate_db_name "${DB_NAME}"; then
-            break
-        fi
-        echo "  [!] Invalid database name. Use letters, numbers and underscores."
+        if _validate_db_name "${DB_NAME}"; then break; fi
+        echo "  [!] Use letters, numbers and underscores only."
     done
 
     while true; do
-        read -rp "  Database username [default: wp_user]: " DB_USER
+        read -rp "  Database user   [default: wp_user]: " DB_USER
         DB_USER="${DB_USER:-wp_user}"
-        if _validate_username "${DB_USER}"; then
-            break
-        fi
-        echo "  [!] Invalid username. Use letters, numbers, underscores, hyphens (3-32 chars)."
+        if _validate_username "${DB_USER}"; then break; fi
+        echo "  [!] Use letters, numbers, underscores, hyphens (3-32 chars)."
     done
 
     while true; do
-        read -rsp "  Database password (leave blank to auto-generate): " DB_PASS
+        read -rsp "  Database password (blank = auto-generate): " DB_PASS
         echo ""
         if [[ -z "${DB_PASS}" ]]; then
-            DB_PASS="$(openssl rand -base64 20)"
-            echo "  [✔] Auto-generated database password: ${DB_PASS}"
-            echo "  [!] Save this password — you will need it on the WordPress setup page."
+            DB_PASS="$(openssl rand -base64 20 | tr -d '/+=' | cut -c1-20)"
+            echo "  [✔] Auto-generated password: ${DB_PASS}"
             break
         fi
-        if _validate_password "${DB_PASS}"; then
-            break
-        fi
+        if _validate_password "${DB_PASS}"; then break; fi
         echo "  [!] Password must be at least 8 characters."
     done
 
-    # SSL
+    # Redis — always installed, just ask preference
     echo ""
-    read -rp "  Install SSL certificate (Let's Encrypt)? [Y/n]: " ssl_choice
-    ssl_choice="${ssl_choice:-Y}"
-    [[ "${ssl_choice,,}" == "n" ]] && INSTALL_SSL=false || INSTALL_SSL=true
-
-    # Redis
-    read -rp "  Install Redis object cache? [Y/n]: " redis_choice
+    echo "  ── Redis ─────────────────────────────────────────────────────────"
+    read -rp "  Install Redis? (recommended for caching) [Y/n]: " redis_choice
     redis_choice="${redis_choice:-Y}"
     [[ "${redis_choice,,}" == "n" ]] && INSTALL_REDIS=false || INSTALL_REDIS=true
 
-    # Confirmation summary
+    # Summary
     echo ""
     log_section "Installation Summary"
     echo ""
-    printf "  %-25s %s\n" "Domain:"        "${DOMAIN}"
-    printf "  %-25s %s\n" "Admin Email:"   "${ADMIN_EMAIL}"
-    printf "  %-25s %s\n" "Web Server:"    "${WEB_SERVER}"
-    printf "  %-25s %s\n" "PHP Version:"   "${PHP_VERSION}"
-    printf "  %-25s %s\n" "Database Name:" "${DB_NAME}"
-    printf "  %-25s %s\n" "Database User:" "${DB_USER}"
-    printf "  %-25s %s\n" "Database Pass:" "${DB_PASS}"
-    printf "  %-25s %s\n" "Install SSL:"   "${INSTALL_SSL}"
-    printf "  %-25s %s\n" "Install Redis:" "${INSTALL_REDIS}"
+    printf "  %-22s %s\n" "WordPress URL:"   "http://${DOMAIN}/"
+    printf "  %-22s %s\n" "WordPress dir:"   "/var/www/wordpress"
+    printf "  %-22s %s\n" "Web Server:"      "${WEB_SERVER}"
+    printf "  %-22s %s\n" "PHP Version:"     "${PHP_VERSION}"
+    printf "  %-22s %s\n" "Database Name:"   "${DB_NAME}"
+    printf "  %-22s %s\n" "Database User:"   "${DB_USER}"
+    printf "  %-22s %s\n" "Database Pass:"   "${DB_PASS}"
+    printf "  %-22s %s\n" "Redis:"           "${INSTALL_REDIS}"
     echo ""
-    echo "  ┌─────────────────────────────────────────────────────────────┐"
-    echo "  │  After install, open https://${DOMAIN}/ in your browser    │"
-    echo "  │  and enter the database credentials above to finish setup.  │"
-    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo "  ┌──────────────────────────────────────────────────────────────┐"
+    echo "  │  Save the database credentials above — you will enter them   │"
+    echo "  │  on the WordPress setup page after installation completes.   │"
+    echo "  └──────────────────────────────────────────────────────────────┘"
     echo ""
 
     read -rp "  Proceed with installation? [Y/n]: " confirm
     confirm="${confirm:-Y}"
     if [[ "${confirm,,}" == "n" ]]; then
-        log_info "Installation cancelled by user."
+        log_info "Installation cancelled."
         exit 0
     fi
 }
@@ -462,20 +447,10 @@ _validate_unattended_config() {
     if [[ -z "${DOMAIN}" ]]; then
         log_error "DOMAIN is required."
         errors=$(( errors + 1 ))
-    elif ! _validate_domain "${DOMAIN}"; then
-        log_error "DOMAIN '${DOMAIN}' is invalid."
+    elif ! _validate_domain_or_ip "${DOMAIN}"; then
+        log_error "DOMAIN '${DOMAIN}' is not a valid domain or IP."
         errors=$(( errors + 1 ))
     fi
-
-    if [[ -z "${ADMIN_EMAIL}" ]]; then
-        log_error "ADMIN_EMAIL is required."
-        errors=$(( errors + 1 ))
-    elif ! _validate_email "${ADMIN_EMAIL}"; then
-        log_error "ADMIN_EMAIL '${ADMIN_EMAIL}' is invalid."
-        errors=$(( errors + 1 ))
-    fi
-
-    WP_ADMIN_EMAIL="${WP_ADMIN_EMAIL:-${ADMIN_EMAIL}}"
 
     if [[ "${WEB_SERVER,,}" != "nginx" && "${WEB_SERVER,,}" != "apache" ]]; then
         log_error "WEB_SERVER must be 'nginx' or 'apache'."
@@ -487,9 +462,7 @@ _validate_unattended_config() {
         exit 1
     fi
 
-    # Auto-generate DB password if not provided
-    [[ -z "${DB_PASS}" ]] && DB_PASS="$(openssl rand -base64 20)"
-
+    [[ -z "${DB_PASS}" ]] && DB_PASS="$(openssl rand -base64 20 | tr -d '/+=' | cut -c1-20)"
     log_success "Configuration validated."
 }
 
@@ -498,14 +471,13 @@ _validate_unattended_config() {
 # ---------------------------------------------------------------------------
 _export_globals() {
     export DOMAIN ADMIN_EMAIL WEB_SERVER PHP_VERSION
-    export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
-    export INSTALL_REDIS INSTALL_SSL
+    export DB_NAME DB_USER DB_PASS
+    export INSTALL_REDIS
     export WEB_ROOT WP_DIR SSL_ENABLED HEALTH_STATUS
-    # Derived
-    WP_DIR="${WEB_ROOT}/${DOMAIN}"
+    # WordPress always lives at /var/www/wordpress
+    WP_DIR="/var/www/wordpress"
     WP_DOMAIN="${DOMAIN}"
-    SSL_DOMAIN="${DOMAIN}"
-    export WP_DIR WP_DOMAIN SSL_DOMAIN
+    export WP_DIR WP_DOMAIN
 }
 
 # ---------------------------------------------------------------------------
@@ -517,97 +489,90 @@ _run_installation() {
 
     log_section "WP Master Installer v1.0.0"
     log_info "Log file: ${LOG_FILE}"
-    log_info "Mode: $(${UNATTENDED_MODE} && echo 'Unattended' || echo 'Interactive')"
+    log_info "WordPress dir: /var/www/wordpress"
 
-    # Show any already-completed steps so user knows what will be skipped
     checkpoint_status
 
-    # --- Phase 1: OS Detection ---
+    # --- Phase 1: OS ---
     rollback_init
-    checkpoint_run "os_detect"              os_detect           || exit 1
-    checkpoint_run "os_update"              os_update           || exit 1
+    checkpoint_run "os_detect"  os_detect  || exit 1
+    checkpoint_run "os_update"  os_update  || exit 1
 
     # --- Phase 2: Web Server ---
-    checkpoint_run "webserver_install"      webserver_install   || exit 1
-    checkpoint_run "webserver_enable"       webserver_enable    warn
+    checkpoint_run "webserver_install" webserver_install || exit 1
+    checkpoint_run "webserver_enable"  webserver_enable  warn
 
     # --- Phase 3: PHP ---
-    checkpoint_run "php_install"            php_install         || exit 1
-    checkpoint_run "php_configure"          php_configure       || exit 1
+    checkpoint_run "php_install"   php_install   || exit 1
+    checkpoint_run "php_configure" php_configure || exit 1
 
-    # --- Phase 4: MariaDB ---
-    checkpoint_run "mariadb_install"        mariadb_install     || exit 1
-    checkpoint_run "mariadb_secure"         mariadb_secure      || exit 1
-    checkpoint_run "mariadb_create_db"      mariadb_create_database || exit 1
+    # --- Phase 4: MariaDB — install, create DB, optimize (no secure step) ---
+    checkpoint_run "mariadb_install"    mariadb_install         || exit 1
+    checkpoint_run "mariadb_create_db"  mariadb_create_database || exit 1
+    checkpoint_run "optimize_mariadb"   mariadb_optimize        warn
 
     # --- Phase 5: WordPress ---
-    checkpoint_run "wpcli_install"          wpcli_install           || exit 1
-    checkpoint_run "wordpress_download"     wordpress_download      || exit 1
+    checkpoint_run "wpcli_install"          wpcli_install             || exit 1
+    checkpoint_run "wordpress_download"     wordpress_download        || exit 1
+    checkpoint_run "webserver_vhost"        webserver_configure_vhost || exit 1
+    checkpoint_run "wordpress_htaccess"     wordpress_create_htaccess warn
+    checkpoint_run "wordpress_permissions"  wordpress_set_permissions || exit 1
 
-    # NOTE: wp-config.php is intentionally NOT generated here.
-    # The user completes setup via the browser WordPress installer page.
-
-    # --- Phase 6: Web Server Virtual Host ---
-    checkpoint_run "webserver_vhost"        webserver_configure_vhost   || exit 1
-    checkpoint_run "wordpress_htaccess"     wordpress_create_htaccess   warn
-    checkpoint_run "wordpress_permissions"  wordpress_set_permissions   || exit 1
-
-    # --- Phase 7: Redis (optional) ---
+    # --- Phase 6: Redis — install only, user decides configuration ---
     if [[ "${INSTALL_REDIS}" == "true" ]]; then
-        checkpoint_run "redis_install"      redis_install           warn
-        checkpoint_run "redis_configure"    redis_configure         warn
-        # redis_configure_wordpress skipped — requires wp-config.php
+        checkpoint_run "redis_install" redis_install warn
     fi
 
-    # --- Phase 8: SSL (optional) ---
-    if [[ "${INSTALL_SSL}" == "true" ]]; then
-        checkpoint_run "ssl_install_certbot"    ssl_install_certbot     warn
-        checkpoint_run "ssl_obtain_cert"        ssl_obtain_certificate  warn
-        if [[ "${SSL_ENABLED}" == "true" ]]; then
-            checkpoint_run "ssl_auto_renewal"   ssl_setup_auto_renewal  warn
-            checkpoint_run "ssl_test_renewal"   ssl_test_renewal        warn
-        fi
-    fi
+    # --- Phase 7: Optimization ---
+    checkpoint_run "optimize_kernel" optimize_system_kernel warn
 
-    # --- Phase 9: Optimization ---
-    checkpoint_run "optimize_mariadb"   mariadb_optimize        warn
-    checkpoint_run "optimize_kernel"    optimize_system_kernel  warn
+    # --- Phase 8: Health Check ---
+    checkpoint_run "verify_stack" verify_full_stack warn
 
-    # --- Phase 10: Health Check ---
-    checkpoint_run "verify_stack"       verify_full_stack       warn
-
-    # --- Phase 11: Report ---
+    # --- Phase 9: Report ---
     report_generate
 
-    local end_time
+    local end_time duration proto
     end_time=$(date +%s)
-    local duration=$(( end_time - start_time ))
+    duration=$(( end_time - start_time ))
+    proto="http"
+
     log_info "Installation completed in ${duration} seconds."
 
-    # --- Final Banner ---
-    local proto="http"
-    [[ "${SSL_ENABLED:-false}" == "true" ]] && proto="https"
+    report_final_banner "SUCCESS"
 
-    if [[ "${HEALTH_STATUS:-UNCHECKED}" != *"DEGRADED"* ]]; then
-        report_final_banner "SUCCESS"
-    else
-        report_final_banner "FAILED"
-        exit 1
-    fi
-
+    # ── Credentials box ───────────────────────────────────────────────────
     echo ""
-    echo "  ╔══════════════════════════════════════════════════════════════╗"
-    echo "  ║           NEXT STEP — Complete WordPress Setup               ║"
-    echo "  ╠══════════════════════════════════════════════════════════════╣"
-    printf "  ║  Open in browser: %-43s║\n" "${proto}://${DOMAIN}/"
-    echo "  ║                                                              ║"
-    echo "  ║  When prompted, enter these database details:                ║"
-    printf "  ║    Database Name : %-43s║\n" "${DB_NAME}"
-    printf "  ║    Username      : %-43s║\n" "${DB_USER}"
-    printf "  ║    Password      : %-43s║\n" "${DB_PASS}"
-    echo "  ║    Database Host : 127.0.0.1                                 ║"
-    echo "  ║    Table Prefix  : wp_  (or choose your own)                 ║"
-    echo "  ╚══════════════════════════════════════════════════════════════╝"
+    echo "  ╔══════════════════════════════════════════════════════════════════╗"
+    echo "  ║        NEXT STEP — Complete WordPress Setup in Browser           ║"
+    echo "  ╠══════════════════════════════════════════════════════════════════╣"
+    printf  "  ║  Open: %-59s║\n" "${proto}://${DOMAIN}/"
+    echo "  ║                                                                  ║"
+    echo "  ║  Enter these details on the WordPress setup page:               ║"
+    printf  "  ║    Database Name  : %-45s║\n" "${DB_NAME}"
+    printf  "  ║    Username       : %-45s║\n" "${DB_USER}"
+    printf  "  ║    Password       : %-45s║\n" "${DB_PASS}"
+    echo "  ║    Database Host  : 127.0.0.1                                    ║"
+    echo "  ║    Table Prefix   : wp_                                          ║"
+    echo "  ╚══════════════════════════════════════════════════════════════════╝"
+
+    # ── Redis suggestion ──────────────────────────────────────────────────
+    if [[ "${INSTALL_REDIS}" == "true" ]]; then
+        echo ""
+        echo "  ╔══════════════════════════════════════════════════════════════════╗"
+        echo "  ║        Redis is installed — Here's how to enable it             ║"
+        echo "  ╠══════════════════════════════════════════════════════════════════╣"
+        echo "  ║  After completing WordPress setup, add this to wp-config.php:   ║"
+        echo "  ║                                                                  ║"
+        echo "  ║    define('WP_REDIS_HOST', '127.0.0.1');                        ║"
+        echo "  ║    define('WP_REDIS_PORT', 6379);                               ║"
+        echo "  ║    define('WP_CACHE', true);                                    ║"
+        echo "  ║                                                                  ║"
+        echo "  ║  Then install the 'Redis Object Cache' plugin from:             ║"
+        echo "  ║    WP Admin → Plugins → Add New → search 'Redis Object Cache'   ║"
+        echo "  ║  Activate it and click 'Enable Object Cache' in the plugin.     ║"
+        echo "  ╚══════════════════════════════════════════════════════════════════╝"
+    fi
     echo ""
 }
 
@@ -652,12 +617,11 @@ BANNER
         log_info "Persisted credentials cleared. Fresh passwords will be generated."
     fi
 
-    # Reload any persisted DB credentials so all phases use the same passwords
-    # that were actually written to MariaDB on a prior run.
+    # Reload persisted DB credentials so all phases use the same passwords
     if [[ -f "/root/.wp-master-db-creds" ]]; then
         # shellcheck disable=SC1091
         source "/root/.wp-master-db-creds"
-        export DB_NAME DB_USER DB_PASS DB_ROOT_PASS
+        export DB_NAME DB_USER DB_PASS
         log_info "Loaded persisted database credentials."
     fi
 
