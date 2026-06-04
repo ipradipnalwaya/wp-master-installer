@@ -74,24 +74,29 @@ ssl_install_certbot() {
 ssl_verify_dns() {
     log_step "Verifying DNS for ${SSL_DOMAIN}..."
 
+    # SYS_SERVER_IP may be empty if os_detect was skipped — read directly
+    local server_ip="${SYS_SERVER_IP}"
+    if [[ -z "${server_ip}" ]]; then
+        server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+    fi
+
     local resolved_ip
     resolved_ip=$(dig +short "${SSL_DOMAIN}" A 2>/dev/null \
         || host -t A "${SSL_DOMAIN}" 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1 \
         || nslookup "${SSL_DOMAIN}" 2>/dev/null | grep -A1 'Name:' | grep 'Address:' | awk '{print $2}' | head -1)
 
     if [[ -z "${resolved_ip}" ]]; then
-        # Try with www
         resolved_ip=$(dig +short "www.${SSL_DOMAIN}" A 2>/dev/null || echo "")
     fi
 
     if [[ -z "${resolved_ip}" ]]; then
         log_warn "DNS resolution for '${SSL_DOMAIN}' failed. SSL certificate generation may fail."
-        log_warn "Ensure your domain's A record points to ${SYS_SERVER_IP}"
+        log_warn "Ensure your domain's A record points to ${server_ip}"
         return 1
     fi
 
-    if [[ "${resolved_ip}" != "${SYS_SERVER_IP}" ]]; then
-        log_warn "DNS for '${SSL_DOMAIN}' resolves to ${resolved_ip}, but server IP is ${SYS_SERVER_IP}."
+    if [[ "${resolved_ip}" != "${server_ip}" ]]; then
+        log_warn "DNS for '${SSL_DOMAIN}' resolves to ${resolved_ip}, but server IP is ${server_ip}."
         log_warn "SSL certificate generation may fail if DNS doesn't match."
     else
         log_success "DNS verified: ${SSL_DOMAIN} -> ${resolved_ip}"
