@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 # modules/logging.sh — Centralized Logging Module
-# wp-master-installer
+# WP Master Installer
+#
+# Author    : Pradip Nalwaya
+# Company   : Operisoft (https://operisoft.com)
+# Copyright : © 2026 Pradip Nalwaya, Operisoft. All rights reserved.
+# License   : MIT
 # =============================================================================
 
 # Guard against double-sourcing

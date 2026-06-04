@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 # modules/apache.sh — Apache2 Installation & Configuration Module
-# wp-master-installer
+# WP Master Installer
+#
+# Author    : Pradip Nalwaya
+# Company   : Operisoft (https://operisoft.com)
+# Copyright : © 2026 Pradip Nalwaya, Operisoft. All rights reserved.
+# License   : MIT
 # =============================================================================
 
 [[ -n "${_APACHE_SH_LOADED:-}" ]] && return 0

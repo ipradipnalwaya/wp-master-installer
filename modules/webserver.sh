@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 # modules/webserver.sh — Web Server Dispatcher Module
-# wp-master-installer
+# WP Master Installer
+#
+# Author    : Pradip Nalwaya
+# Company   : Operisoft (https://operisoft.com)
+# Copyright : © 2026 Pradip Nalwaya, Operisoft. All rights reserved.
+# License   : MIT
 # =============================================================================
 
 [[ -n "${_WEBSERVER_SH_LOADED:-}" ]] && return 0

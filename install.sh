@@ -9,8 +9,10 @@
 #   Unattended   : sudo bash install.sh --unattended --config /path/to/config.env
 #   Help         : bash install.sh --help
 #
-# Author  : wp-master-installer project
-# License : MIT
+# Author    : Pradip Nalwaya
+# Company   : Operisoft (https://operisoft.com)
+# Copyright : © 2026 Pradip Nalwaya, Operisoft. All rights reserved.
+# License   : MIT
 # =============================================================================
 
 set -Eeuo pipefail
@@ -627,6 +629,7 @@ main() {
  \___/      |_____| |_| |_| |_|  |_|\__,_|___/\__\___|_|
 
      WP Master Installer v1.0.0 — Ubuntu WordPress Stack
+     © 2026 Pradip Nalwaya, Operisoft (https://operisoft.com)
 BANNER
     echo ""
 

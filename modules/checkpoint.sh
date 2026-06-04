@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # modules/checkpoint.sh — Resume / Checkpoint Module
-# wp-master-installer
+# WP Master Installer
 #
+# Author    : Pradip Nalwaya
+# Company   : Operisoft (https://operisoft.com)
+# Copyright : © 2026 Pradip Nalwaya, Operisoft. All rights reserved.
+# License   : MIT
+# =============================================================================
 # Usage:
 #   checkpoint_mark  <step_name>          # mark a step as done
 #   checkpoint_done  <step_name>          # returns 0 if already done
