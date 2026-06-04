@@ -108,7 +108,7 @@ wp() {
 }
 
 # ---------------------------------------------------------------------------
-# Download & extract latest WordPress
+# Download & extract latest WordPress from wordpress.org
 # ---------------------------------------------------------------------------
 wordpress_download() {
     log_section "WordPress Download"
@@ -116,22 +116,55 @@ wordpress_download() {
     mkdir -p "${WP_DIR}"
     chown www-data:www-data "${WP_DIR}"
 
-    if [[ -f "${WP_DIR}/wp-config.php" ]] || [[ -f "${WP_DIR}/wp-login.php" ]]; then
+    if [[ -f "${WP_DIR}/wp-login.php" ]]; then
         log_info "WordPress already present at ${WP_DIR}. Skipping download."
         return 0
     fi
 
-    log_step "Downloading latest WordPress to ${WP_DIR}..."
-    sudo -u www-data "${WP_CLI_BIN}" core download \
-        --path="${WP_DIR}" \
-        --locale=en_US \
-        --allow-root \
-        2>&1 | tee -a "${LOG_FILE}" || {
-        log_error "WordPress download failed."
+    local tmp_zip="/tmp/wordpress-latest.zip"
+    local tmp_dir="/tmp/wordpress-extract"
+
+    log_step "Downloading WordPress from https://wordpress.org/latest.zip ..."
+
+    # Ensure unzip is available
+    if ! command -v unzip &>/dev/null; then
+        log_step "Installing unzip..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip || {
+            log_error "Cannot install unzip. Aborting."
+            return 1
+        }
+    fi
+    curl -fsSL --connect-timeout 30 --retry 3 \
+        "https://wordpress.org/latest.zip" -o "${tmp_zip}" || {
+        log_error "Failed to download WordPress."
+        rm -f "${tmp_zip}"
         return 1
     }
 
-    log_success "WordPress downloaded."
+    # Verify it is a valid zip
+    if ! unzip -t "${tmp_zip}" &>/dev/null; then
+        log_error "Downloaded file is not a valid zip archive."
+        rm -f "${tmp_zip}"
+        return 1
+    fi
+
+    log_step "Extracting WordPress to ${WP_DIR}..."
+    rm -rf "${tmp_dir}"
+    unzip -q "${tmp_zip}" -d "${tmp_dir}" || {
+        log_error "Failed to extract WordPress."
+        rm -f "${tmp_zip}"
+        return 1
+    }
+
+    # unzip creates a 'wordpress' subdirectory — move its contents to WP_DIR
+    cp -a "${tmp_dir}/wordpress/." "${WP_DIR}/"
+
+    # Cleanup
+    rm -rf "${tmp_zip}" "${tmp_dir}"
+
+    chown -R www-data:www-data "${WP_DIR}"
+
+    log_success "WordPress downloaded and extracted to ${WP_DIR}."
     return 0
 }
 
