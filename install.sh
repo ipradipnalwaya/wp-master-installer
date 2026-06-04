@@ -81,7 +81,6 @@ _source_modules() {
         php
         mariadb
         wordpress
-        ssl
         redis
         optimize
         verify
@@ -512,7 +511,6 @@ _run_installation() {
     checkpoint_run "optimize_mariadb"   mariadb_optimize        warn
 
     # --- Phase 5: WordPress ---
-    checkpoint_run "wpcli_install"          wpcli_install             || exit 1
     checkpoint_run "wordpress_download"     wordpress_download        || exit 1
     checkpoint_run "webserver_vhost"        webserver_configure_vhost || exit 1
     checkpoint_run "wordpress_htaccess"     wordpress_create_htaccess warn
