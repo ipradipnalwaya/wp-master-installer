@@ -8,13 +8,9 @@
 _OS_SH_LOADED=1
 
 # ---------------------------------------------------------------------------
-# Supported versions
+# Supported versions (space-separated list — no associative array needed)
 # ---------------------------------------------------------------------------
-declare -A SUPPORTED_UBUNTU=(
-    ["20.04"]="focal"
-    ["22.04"]="jammy"
-    ["24.04"]="noble"
-)
+SUPPORTED_UBUNTU_VERSIONS="20.04 22.04 24.04"
 
 # Exported globals populated by os_detect()
 DISTRO_ID=""
@@ -52,9 +48,15 @@ _os_validate() {
         return 1
     fi
 
-    if [[ -z "${SUPPORTED_UBUNTU[${DISTRO_VERSION}]+_}" ]]; then
+    local ver_ok=0
+    local ver
+    for ver in ${SUPPORTED_UBUNTU_VERSIONS}; do
+        [[ "${DISTRO_VERSION}" == "${ver}" ]] && { ver_ok=1; break; }
+    done
+
+    if [[ "${ver_ok}" -eq 0 ]]; then
         log_fatal "Unsupported Ubuntu version: ${DISTRO_VERSION}."
-        log_fatal "Supported versions: ${!SUPPORTED_UBUNTU[*]}"
+        log_fatal "Supported versions: ${SUPPORTED_UBUNTU_VERSIONS}"
         return 1
     fi
 
