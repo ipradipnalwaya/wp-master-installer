@@ -70,6 +70,7 @@ trap '_on_interrupt' INT TERM
 # ---------------------------------------------------------------------------
 _source_modules() {
     local module_files=(
+        checkpoint
         rollback
         os
         webserver
@@ -122,6 +123,7 @@ _set_defaults() {
     WP_DIR=""
     SSL_ENABLED=false
     HEALTH_STATUS="UNCHECKED"
+    RESET_CHECKPOINTS=false
 }
 
 # ---------------------------------------------------------------------------
@@ -190,6 +192,11 @@ _parse_args() {
                 ROLLBACK_ON_ERROR=false
                 shift
                 ;;
+            --reset-checkpoints)
+                # Handled after modules are loaded, flag it for now
+                RESET_CHECKPOINTS=true
+                shift
+                ;;
             --debug)
                 LOG_VERBOSITY=0
                 shift
@@ -249,6 +256,7 @@ OPTIONS:
   --no-ssl                Skip SSL certificate setup
   --no-redis              Skip Redis installation
   --no-rollback           Disable automatic rollback on error
+  --reset-checkpoints     Wipe saved progress and start from scratch
   --debug                 Enable verbose debug logging
   --help, -h              Show this help
 
@@ -554,62 +562,65 @@ _run_installation() {
     log_info "Log file: ${LOG_FILE}"
     log_info "Mode: $(${UNATTENDED_MODE} && echo 'Unattended' || echo 'Interactive')"
 
+    # Show any already-completed steps so user knows what will be skipped
+    checkpoint_status
+
     # --- Phase 1: OS Detection ---
     rollback_init
-    os_detect   || exit 1
-    os_update   || exit 1
+    checkpoint_run "os_detect"              os_detect           || exit 1
+    checkpoint_run "os_update"              os_update           || exit 1
 
     # --- Phase 2: Web Server ---
-    webserver_install           || exit 1
-    webserver_enable            || true
+    checkpoint_run "webserver_install"      webserver_install   || exit 1
+    checkpoint_run "webserver_enable"       webserver_enable    warn
 
     # --- Phase 3: PHP ---
-    php_install                 || exit 1
-    php_configure               || exit 1
+    checkpoint_run "php_install"            php_install         || exit 1
+    checkpoint_run "php_configure"          php_configure       || exit 1
 
     # --- Phase 4: MariaDB ---
-    mariadb_install             || exit 1
-    mariadb_secure              || exit 1
-    mariadb_create_database     || exit 1
-    mariadb_verify_access       || exit 1
+    checkpoint_run "mariadb_install"        mariadb_install     || exit 1
+    checkpoint_run "mariadb_secure"         mariadb_secure      || exit 1
+    checkpoint_run "mariadb_create_db"      mariadb_create_database || exit 1
+    checkpoint_run "mariadb_verify_access"  mariadb_verify_access   || exit 1
 
     # --- Phase 5: WordPress ---
-    wpcli_install               || exit 1
-    wordpress_download          || exit 1
-    wordpress_configure         || exit 1
+    checkpoint_run "wpcli_install"          wpcli_install       || exit 1
+    checkpoint_run "wordpress_download"     wordpress_download  || exit 1
+    checkpoint_run "wordpress_configure"    wordpress_configure || exit 1
 
     # --- Phase 6: Web Server Virtual Host ---
-    webserver_configure_vhost   || exit 1
-    wordpress_create_htaccess   || true
-    wordpress_set_permissions   || exit 1
+    checkpoint_run "webserver_vhost"        webserver_configure_vhost   || exit 1
+    checkpoint_run "wordpress_htaccess"     wordpress_create_htaccess   warn
+    checkpoint_run "wordpress_permissions"  wordpress_set_permissions   || exit 1
 
     # --- Phase 7: WordPress Core Install ---
-    wordpress_install           || exit 1
+    checkpoint_run "wordpress_install"      wordpress_install   || exit 1
 
     # --- Phase 8: Redis (optional) ---
     if [[ "${INSTALL_REDIS}" == "true" ]]; then
-        redis_install                   || log_warn "Redis install failed (non-fatal)."
-        redis_configure                 || log_warn "Redis config failed (non-fatal)."
-        redis_configure_wordpress       || log_warn "Redis WP integration failed (non-fatal)."
+        checkpoint_run "redis_install"              redis_install               warn
+        checkpoint_run "redis_configure"            redis_configure             warn
+        checkpoint_run "redis_configure_wordpress"  redis_configure_wordpress   warn
     fi
 
     # --- Phase 9: SSL (optional) ---
     if [[ "${INSTALL_SSL}" == "true" ]]; then
-        ssl_install_certbot     || log_warn "Certbot install failed."
-        ssl_obtain_certificate  || log_warn "SSL cert generation failed (non-fatal)."
+        checkpoint_run "ssl_install_certbot"    ssl_install_certbot     warn
+        checkpoint_run "ssl_obtain_cert"        ssl_obtain_certificate  warn
         if [[ "${SSL_ENABLED}" == "true" ]]; then
-            ssl_setup_auto_renewal  || log_warn "Auto-renewal setup failed."
-            ssl_test_renewal        || log_warn "Renewal dry run failed."
+            checkpoint_run "ssl_auto_renewal"   ssl_setup_auto_renewal  warn
+            checkpoint_run "ssl_test_renewal"   ssl_test_renewal        warn
         fi
     fi
 
     # --- Phase 10: Optimization ---
-    mariadb_optimize            || log_warn "MariaDB optimization had warnings."
-    optimize_system_kernel      || log_warn "Kernel optimization had warnings."
-    optimize_wordpress          || log_warn "WordPress optimization had warnings."
+    checkpoint_run "optimize_mariadb"   mariadb_optimize        warn
+    checkpoint_run "optimize_kernel"    optimize_system_kernel  warn
+    checkpoint_run "optimize_wordpress" optimize_wordpress      warn
 
     # --- Phase 11: Health Check ---
-    verify_full_stack || log_warn "Some services failed health check."
+    checkpoint_run "verify_stack"       verify_full_stack       warn
 
     # --- Phase 12: Report ---
     report_generate
@@ -659,6 +670,12 @@ BANNER
     fi
 
     _export_globals
+
+    # Reset checkpoints if requested (must come after globals so state file path is known)
+    if [[ "${RESET_CHECKPOINTS}" == "true" ]]; then
+        checkpoint_reset
+    fi
+
     _run_installation
 }
 
