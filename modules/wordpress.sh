@@ -32,7 +32,6 @@ wpcli_install() {
         return 0
     fi
 
-    # Ensure PHP is available — WP-CLI is a PHP phar and requires it
     if ! command -v php &>/dev/null; then
         log_error "PHP is not installed or not in PATH. WP-CLI requires PHP."
         return 1
@@ -42,24 +41,40 @@ wpcli_install() {
     local tmp_phar
     tmp_phar="$(mktemp /tmp/wp-cli.phar.XXXXXX)"
 
-    if ! curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" \
-            -o "${tmp_phar}"; then
-        log_error "Failed to download WP-CLI."
-        rm -f "${tmp_phar}"
-        return 1
-    fi
+    # Try multiple official sources in order
+    local urls=(
+        "https://github.com/wp-cli/wp-cli/releases/latest/download/wp-cli.phar"
+        "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+        "https://wp-cli.org/packages/phar/wp-cli.phar"
+    )
 
-    # Basic sanity check — the phar should start with '<?php'
-    if ! head -c 5 "${tmp_phar}" | grep -q '<?php'; then
-        log_error "Downloaded file does not appear to be a valid PHP phar."
+    local downloaded=false
+    for url in "${urls[@]}"; do
+        log_info "Trying: ${url}"
+        if curl -fsSL --connect-timeout 15 --retry 3 "${url}" -o "${tmp_phar}" 2>/dev/null; then
+            # Verify it is actually a PHP phar (first bytes must be <?php)
+            if head -c 5 "${tmp_phar}" | grep -q '<?php'; then
+                downloaded=true
+                log_info "Downloaded successfully from: ${url}"
+                break
+            else
+                log_warn "Response from ${url} is not a valid PHP phar. Trying next..."
+            fi
+        else
+            log_warn "Failed to fetch from ${url}. Trying next..."
+        fi
+    done
+
+    if [[ "${downloaded}" != "true" ]]; then
         rm -f "${tmp_phar}"
+        log_error "All WP-CLI download sources failed."
+        log_info  "Manual install: curl -O https://github.com/wp-cli/wp-cli/releases/latest/download/wp-cli.phar && chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp"
         return 1
     fi
 
     chmod +x "${tmp_phar}"
     mv "${tmp_phar}" "${WP_CLI_BIN}"
 
-    # Verify
     local ver
     ver="$(_wpcli_run --version 2>/dev/null)"
     if [[ -n "${ver}" ]]; then
